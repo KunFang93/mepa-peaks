@@ -1,0 +1,9 @@
+lab	sample	role	broadpeak	permissive_broadpeak	bam	bigwig
+lab_A	A_rep1	target	data/A_rep1.primary.broadPeak	data/A_rep1.permissive.broadPeak	data/A_rep1.bam	data/A_rep1.midpoints.bw
+lab_A	A_rep2	target	data/A_rep2.primary.broadPeak	data/A_rep2.permissive.broadPeak	data/A_rep2.bam
+lab_A	A_igg1	igg			data/A_igg1.bam
+lab_A	A_igg2	igg				data/A_igg2.midpoints.bw
+lab_B	B_rep1	target	data/B_rep1.primary.broadPeak	data/B_rep1.permissive.broadPeak	data/B_rep1.bam
+lab_B	B_rep2	target	data/B_rep2.primary.broadPeak	data/B_rep2.permissive.broadPeak		data/B_rep2.midpoints.bw
+lab_C	C_rep1	target	data/C_rep1.primary.broadPeak	data/C_rep1.permissive.broadPeak	data/C_rep1.bam
+lab_C	C_igg1	igg			data/C_igg1.bam

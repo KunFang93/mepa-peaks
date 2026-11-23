@@ -53,8 +53,10 @@ def check_inputs(labs, lengths, executable):
 
 
 def build_parser():
-    parser = argparse.ArgumentParser(prog="confident-pooled-peaks",
-                                     description="Pool broad peaks from exactly three labs, starting from MACS3 calls.")
+    parser = argparse.ArgumentParser(
+        prog="mepa-peaks",
+        description="MEPA (Multi-Experiment Peak Aggregation) pools broad peaks from three labs.",
+    )
     stages = parser.add_subparsers(dest="stage", required=True)
     commands = {
         "check": "Check peak files, signal headers, and MSPC version",
@@ -138,11 +140,12 @@ def dispatch(args):
 
 
 def main(argv=None):
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
     try:
         dispatch(args)
     except (ValueError, OSError, RuntimeError, subprocess.SubprocessError) as exc:
-        print(f"confident-pooled-peaks: {exc}", file=sys.stderr)
+        print(f"{parser.prog}: {exc}", file=sys.stderr)
         return 1
     return 0
 

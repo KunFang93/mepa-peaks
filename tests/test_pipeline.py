@@ -19,7 +19,7 @@ from pooled_peaks.midpoints import cache_sample, count_bam, count_bigwig, export
 from pooled_peaks.pooling import run_pooling
 
 
-MSPC = shutil.which(os.environ.get("CONFIDENT_PEAKS_MSPC", "mspc"))
+MSPC = shutil.which(os.environ.get("MEPA_MSPC", "mspc"))
 
 
 def make_bam(path, lengths, fragments):

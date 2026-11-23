@@ -1,8 +1,10 @@
-# Confident pooled peaks
+# MEPA (Multi-Experiment Peak Aggregation)
+
+*Shift-calibrated pooling of broad peaks across labs.*
 
 Build a pooled broad-peak BED from three labs profiling the same mark in comparable samples. Step 3 builds within-lab consensus with MSPC v6.1.0. Step 4 combines lab-level peak calls, rescues loci with reproducible signal, and selects rescue thresholds using a within-chromosome shift test. A lab with one replicate contributes its full primary MACS3 peak set.
 
-![Workflow from MACS3 broadPeak and BAM or midpoint-count BigWig through MSPC, shift calibration, and pooled BED export](docs/workflow.png)
+![MEPA workflow from MACS3 broadPeak and BAM or midpoint-count BigWig through MSPC, shift calibration, and pooled BED export](docs/workflow.png)
 
 ## Install
 
@@ -12,7 +14,7 @@ Use Python 3.11 or newer. Install this repository in a virtual environment. Down
 python -m venv .venv
 source .venv/bin/activate
 python -m pip install .
-confident-pooled-peaks --help
+mepa-peaks --help
 ```
 
 ## Inputs
@@ -32,7 +34,7 @@ Step 3 needs the primary peaks. Step 4 needs one signal source per sample. If bo
 A count BigWig stores the **integer number of fragment midpoints per 250 bp tile**, anchored at chromosome position 0. The terminal tile can be shorter and omitted tiles count as zero. The library depth is the sum over the selected chromosomes. Use the following command to generate a compatible track, keeping MAPQ 0. Ordinary CPM coverage tracks contain a different quantity and need the original BAM for this conversion.
 
 ```bash
-confident-pooled-peaks export-midpoints \
+mepa-peaks export-midpoints \
   --genome genome.tsv --bam data/A_rep1.bam --output data/A_rep1.midpoints.bw
 ```
 
@@ -51,13 +53,13 @@ The included mm39 example uses odd autosomes for calibration, even autosomes oth
 Run an input check, then stop after Step 3 to inspect the per-lab BEDs. Use a new output directory for each stage.
 
 ```bash
-confident-pooled-peaks check --samples samples.tsv --genome genome.tsv --mspc /path/to/mspc
+mepa-peaks check --samples samples.tsv --genome genome.tsv --mspc /path/to/mspc
 
-confident-pooled-peaks step3 \
+mepa-peaks step3 \
   --samples samples.tsv --genome genome.tsv --mspc /path/to/mspc \
   --outdir results/step3_mspc
 
-confident-pooled-peaks step4 \
+mepa-peaks step4 \
   --samples samples.tsv --genome genome.tsv --step3-dir results/step3_mspc \
   --outdir results/step4_pool --workers 4 --target-shift-ratio 0.10
 ```
@@ -65,7 +67,7 @@ confident-pooled-peaks step4 \
 To run both stages in one invocation, give `run` a parent directory. The stage outputs go into `step3_mspc/` and `step4_pool/` within it.
 
 ```bash
-confident-pooled-peaks run \
+mepa-peaks run \
   --samples samples.tsv --genome genome.tsv --mspc /path/to/mspc \
   --outdir results --workers 4
 ```
@@ -140,5 +142,5 @@ The Step 3 and Step 4 commands expect existing peak files. The reference study u
 A replay of the reference mm39 analysis reproduced all 43,309 pooled peak coordinates, the per-peak evidence lengths, and all 1,152 calibration grid rows. The included synthetic test runs MSPC and the shift calibration on three labs and compares the BED, evidence and cutoffs obtained from BAMs with those from their exported BigWigs.
 
 ```bash
-CONFIDENT_PEAKS_MSPC=/path/to/mspc python -m unittest discover -s tests -v
+MEPA_MSPC=/path/to/mspc python -m unittest discover -s tests -v
 ```

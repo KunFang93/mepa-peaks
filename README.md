@@ -94,10 +94,10 @@ Export the MSPC consensus coordinates as the lab-level BED. A singleton bypasses
 For each replicate, estimate the expected count from the combined per-bin mean in the flanks (tiles 11–42 on each side), scaled to the size of the count window. For optional IgG, sum the matched IgG window counts, add one pooled pseudocount, and multiply by the ratio of treatment depth to pooled IgG depth. The expected count $\mu$ is the maximum of the flank expectation, the IgG expectation if supplied, and 0.5. Near chromosome ends use available bins. With zero available flank bins the flank estimate is zero. The signed Poisson deviance score for observed count $k$ is
 
 $$
-z = \operatorname{sign}(k-\mu)\sqrt{2\left[k\ln(k/\mu)-(k-\mu)\right]} .
+z = s\sqrt{2[k\ln(k/\mu) - (k-\mu)]}
 $$
 
-Use $0\ln(0/\mu)=0$. The **lowest replicate score** is the lab score. For example, 12 observed fragments against 10 expected gives $z\approx 0.61$.
+The sign $s$ is $+1$ when $k > \mu$, $-1$ when $k < \mu$, and $0$ when $k = \mu$. Use $k\ln(k/\mu)=0$ when $k=0$. The **lowest replicate score** is the lab score. For example, 12 observed fragments against 10 expected gives $z\approx 0.61$.
 
 **Rescue a one-lab call.** The center of a candidate tile must have exactly one lab-level call and the calling lab must meet the weak score cutoff. A supporting lab needs a permissive MACS3 peak within 500 bp of that center in **every replicate**. The lab's shape must also correlate with the calling lab's shape. For shape, sum counts in a 750 bp window, convert to fragment CPM per replicate, average replicate profiles equally within each lab, and take the square root. Compute Pearson $r$ on 17 points (4,250 bp in tiles). Keep the best $r$ across shifts of −500, −250, 0, +250, and +500 bp. Each qualifying supporting lab contributes one vote. Accept either one strong supporting lab or both other labs at the weak cutoff. Require at least two adjacent passing tiles with the same calling lab. Clip the rescued runs to the union of the primary replicate peaks and retain clipped spans of at least 500 bp.
 
@@ -134,6 +134,8 @@ For example, 26,190 observed seed tiles and a mean of 1,814.53 adjusted shifted 
 | Step 4 `count_summary.tsv`, `peak_inputs.tsv`, `pooling_summary.json` | Signal source and depth, peak inputs, and final peak counts and spans |
 
 ## Upstream MACS3 settings for the reference run
+
+**Applicability.** MEPA was originally developed for broad H3K9me3 peaks in mouse embryonic stem (mES) cells. For transcription factors and other histone modifications with different peak widths or signal shapes, test assay-specific MACS3 settings on your own data. Use replicate agreement and matched controls, where available, to check that MEPA's overlap lengths and signal windows are appropriate before interpreting pooled peaks.
 
 The Step 3 and Step 4 commands expect existing peak files. The reference study used MACS3 3.0.2 on properly paired, primary, nonduplicate nuclear alignments, including MAPQ 0. The primary call used `-f BAMPE -g mm --broad --keep-dup all --llocal 20000 --max-gap 500 -q 0.05 --broad-cutoff 0.10`. The separate permissive call used `-f BAMPE -g mm --broad --keep-dup all -p 0.001 --broad-cutoff 0.05` with the caller's default local window and gap. In each call, supply the matching IgG BAMs via `-c` where available. The shift test calibrates the **Step 4 score and shape cutoffs**. MACS3 and MSPC use their specified peak-calling settings. [MACS3 callpeak documentation](https://macs3-project.github.io/MACS/docs/callpeak.html)
 

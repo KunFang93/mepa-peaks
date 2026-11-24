@@ -98,9 +98,16 @@ def read_samples(path):
         groups.setdefault(lab, {"target": [], "igg": []})[role].append(
             Sample(name, bam, bigwig, primary, permissive)
         )
-    if len(groups) != 3 or any(not group["target"] for group in groups.values()):
-        raise ValueError("The three-lab pooling rule requires exactly three labs with at least one target each")
+    if len(groups) < 2 or any(not group["target"] for group in groups.values()):
+        raise ValueError("MEPA requires at least two labs with at least one target each")
     return tuple(Lab(name, tuple(group["target"]), tuple(group["igg"])) for name, group in groups.items())
+
+
+def resolve_min_labs(lab_count, requested):
+    minimum = lab_count // 2 + 1 if requested is None else requested
+    if not 2 <= minimum <= lab_count:
+        raise ValueError(f"--min-labs must be between 2 and the number of labs ({lab_count})")
+    return minimum
 
 
 def read_peaks(path, lengths, scored=False, prefix=""):

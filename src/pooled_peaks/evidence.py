@@ -93,6 +93,40 @@ def aligned_shape(anchor, profile, positions):
     return best
 
 
+def candidate_anchors(scores, called, direct, min_labs):
+    """Assign a partially called tile to its highest-scoring calling lab."""
+    counts = called.sum(axis=0)
+    anchors = np.full(len(counts), -1, dtype=np.intp)
+    candidates = np.flatnonzero((counts > 0) & (counts < min_labs)
+                                & ~flags(direct, len(counts), center_only=False))
+    anchors[candidates] = np.where(called[:, candidates], scores[:, candidates], -np.inf).argmax(axis=0)
+    return anchors, counts
+
+
+def compare_peers(features, calling_lab, positions, anchor, offsets_kb):
+    """Compare signal from noncalling labs, with optional within-chromosome shifts."""
+    _, peers, profiles, called = features
+    labs = np.array([i for i in range(len(called)) if i != calling_lab], dtype=np.intp)
+    shifted = positions + np.asarray(offsets_kb)[:, None] * (1000 // BIN)
+    noncallers = ~called[labs[:, None], positions]
+    usable = noncallers & ~called[labs[:, None], shifted]
+    # The already-called labs stay fixed. A shifted noncaller must still lack a call.
+    eligible = np.all(~noncallers | usable, axis=0)
+    values = np.where(usable, peers[labs[:, None], shifted], -np.inf)
+    correlations = np.full_like(values, -np.inf)
+    for row, lab in enumerate(labs):
+        valid = eligible & np.isfinite(values[row])
+        if valid.any():
+            correlations[row, valid] = aligned_shape(anchor[valid], profiles[lab], shifted[row, valid])
+    return values, correlations, eligible
+
+
+def support_paths(weak_votes, needed, best_score, strong_cutoff):
+    with_strong_peer = (weak_votes >= needed) & (best_score >= strong_cutoff)
+    with_extra_weak_peer = weak_votes > needed
+    return with_strong_peer, with_extra_weak_peer
+
+
 def build_features(labs, cache, hard, permissive, chrom, length):
     scores, profiles = lab_signals(labs, cache.chrom(chrom), cache.depth)
     n = scores.shape[1]

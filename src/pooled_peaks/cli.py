@@ -7,9 +7,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-from .calibration import SHIFTS_KB
+from .calibration import resolve_shifts
 from .consensus import run_consensus, version_of
-from .inputs import read_genome, read_peaks, read_samples
+from .inputs import read_genome, read_peaks, read_samples, resolve_min_labs
 from .midpoints import check_signal, export_bigwig
 from .pooling import run_pooling
 
@@ -55,7 +55,7 @@ def check_inputs(labs, lengths, executable):
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="mepa-peaks",
-        description="MEPA (Multi-Experiment Peak Aggregation) pools broad peaks from three labs.",
+        description="MEPA (Multi-Experiment Peak Aggregation) pools broad peaks from two or more labs.",
     )
     stages = parser.add_subparsers(dest="stage", required=True)
     commands = {
@@ -83,20 +83,13 @@ def build_parser():
             command.add_argument("--step3-dir", required=True, type=Path, help="Completed Step 3 directory")
         if stage in ("step4", "run"):
             command.add_argument("--workers", type=positive, default=2, help="Parallel BAM/BigWig readers (default: 2)")
+            command.add_argument("--min-labs", type=positive,
+                                 help="Minimum labs supporting a pooled peak (default: strict majority)")
             command.add_argument("--target-shift-ratio", type=fraction, default=0.10,
                                  help="Maximum shifted/observed calibration ratio (default: 0.10)")
-            command.add_argument("--shift-kb", nargs=2, type=int, action="append", metavar=("LEFT", "RIGHT"),
-                                 help="Custom pair of offsets in kb; repeat six times to replace the default shifts")
+            command.add_argument("--shift-kb", nargs="+", type=int, action="append", metavar="KB",
+                                 help="One offset per other lab; repeat six times to replace the default shifts")
     return parser
-
-
-def offsets(custom):
-    if custom is None:
-        return SHIFTS_KB
-    offsets = tuple(map(tuple, custom))
-    if len(offsets) != 6 or len(set(offsets)) != 6 or any(a == 0 or b == 0 or a == b for a, b in offsets):
-        raise ValueError("Provide six distinct shift pairs with two different nonzero offsets each")
-    return offsets
 
 
 def dispatch(args):
@@ -114,7 +107,8 @@ def dispatch(args):
 
     destination = args.outdir.resolve()
     if args.stage in ("step4", "run"):
-        shifts = offsets(args.shift_kb)
+        min_labs = resolve_min_labs(len(labs), args.min_labs)
+        shifts = resolve_shifts(len(labs), args.shift_kb)
         if "calibration" not in splits.values():
             raise ValueError("Label at least one chromosome calibration in the genome TSV")
         for lab in labs:
@@ -134,7 +128,9 @@ def dispatch(args):
         print(f"Step 3 complete: {step3 / 'peak_beds'}", flush=True)
     else:
         step3 = args.step3_dir.resolve()
-    summary = run_pooling(labs, lengths, splits, step3, destination, args.workers, args.target_shift_ratio, shifts)
+    summary = run_pooling(
+        labs, lengths, splits, step3, destination, args.workers, args.target_shift_ratio, shifts, min_labs
+    )
     print(json.dumps(summary, indent=2))
     print(f"Step 4 complete: {destination / 'pooled_peaks.bed'}")
 

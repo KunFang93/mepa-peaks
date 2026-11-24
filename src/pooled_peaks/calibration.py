@@ -4,7 +4,7 @@ from itertools import product
 
 import numpy as np
 
-from .evidence import aligned_shape, flags, normalize_profiles
+from .evidence import candidate_anchors, compare_peers, normalize_profiles, support_paths
 from .inputs import BIN
 
 
@@ -19,53 +19,67 @@ METRIC_COLUMNS = (
 )
 
 
-def empty_counts(shifts):
-    shape = (len(WEAK_GRID), len(STRONG_GRID), len(SHAPE_GRID), 3, len(shifts) + 1, 2)
+def resolve_shifts(lab_count, custom=None):
+    peer_count = lab_count - 1
+    if custom is None:
+        # Preserve both historical displacements. Space extra peers at least 137 kb apart.
+        return tuple(pair[:peer_count] + tuple(
+            (-1)**trial * (1021 + 61 * trial + 137 * peer)
+            for peer in range(peer_count - 2)
+        ) for trial, pair in enumerate(SHIFTS_KB))
+    shifts = tuple(map(tuple, custom))
+    if (len(shifts) != len(SHIFTS_KB) or len(set(shifts)) != len(shifts)
+            or any(len(row) != peer_count or 0 in row or len(set(row)) != peer_count for row in shifts)):
+        raise ValueError(f"Provide six distinct --shift-kb sets with {peer_count} distinct nonzero offsets each")
+    return shifts
+
+
+def empty_counts(shifts, lab_count, min_labs):
+    shape = (len(WEAK_GRID), len(STRONG_GRID), len(SHAPE_GRID),
+             lab_count, len(shifts) + 1, min_labs - 1, 2)
     return np.zeros(shape, dtype=np.int64)
 
 
-def count_sustained(positions, mask):
-    hits = positions[mask]
+def count_sustained(positions, mask, strata, stratum_count):
+    hits = np.flatnonzero(mask)
     if len(hits) < 2:
-        return 0
-    contiguous = np.diff(hits) == 1
-    return np.count_nonzero(np.r_[contiguous, False] | np.r_[False, contiguous])
+        return np.zeros(stratum_count, dtype=np.int64)
+    contiguous = np.diff(positions[hits]) == 1
+    sustained = np.r_[contiguous, False] | np.r_[False, contiguous]
+    return np.bincount(strata[hits[sustained]], minlength=stratum_count)
 
 
-def calibrate_chrom(features, original, shifts_kb):
-    scores, peers, profiles, called = features
-    old = flags(original, scores.shape[1], center_only=False)
-    # Compare the same anchored centers for all seven displacements without wrapping.
-    margin = max(abs(k) for pair in shifts_kb for k in pair) * 1000 // BIN
-    available = (called.sum(axis=0) == 1) & ~old
-    available[:margin] = available[-margin:] = False
-    totals = empty_counts(shifts_kb)
-    for i, anchor_calls in enumerate(called):
-        positions = np.flatnonzero(available & anchor_calls)
+def calibrate_chrom(features, direct, shifts_kb, min_labs):
+    scores, _, profiles, called = features
+    anchors, call_counts = candidate_anchors(scores, called, direct, min_labs)
+    margin = max(abs(k) for shifts in shifts_kb for k in shifts) * 1000 // BIN
+    anchors[:margin] = anchors[-margin:] = -1
+    totals = empty_counts(shifts_kb, len(called), min_labs)
+    displacements = ((0,) * (len(called) - 1), *shifts_kb)
+    stratum_count = min_labs - 1
+    for i in range(len(called)):
+        positions = np.flatnonzero(anchors == i)
         if not len(positions):
             continue
-        j, k = (peer for peer in range(len(called)) if peer != i)
         own = scores[i, positions]
         anchor = normalize_profiles(profiles[i], positions)
-        for shift_id, (left, right) in enumerate(((0, 0), *shifts_kb)):
-            pos_a = positions + left * 1000 // BIN
-            pos_b = positions + right * 1000 // BIN
-            eligible = ~called[j, pos_a] & ~called[k, pos_b]
-            eligible_count = eligible.sum()
-            a, b = peers[j, pos_a], peers[k, pos_b]
-            corr_a = aligned_shape(anchor, profiles[j], pos_a)
-            corr_b = aligned_shape(anchor, profiles[k], pos_b)
+        needed = min_labs - call_counts[positions]
+        strata = call_counts[positions] - 1
+        for shift_id, shifts in enumerate(displacements):
+            values, correlations, eligible = compare_peers(features, i, positions, anchor, shifts)
+            eligible_count = np.bincount(strata[eligible], minlength=stratum_count)
+            totals[:, :, :, i, shift_id, :, 1] = eligible_count
             for ic, corr in enumerate(SHAPE_GRID):
-                eligible_a = np.where(corr_a >= corr, a, -np.inf)
-                eligible_b = np.where(corr_b >= corr, b, -np.inf)
-                low, high = np.minimum(eligible_a, eligible_b), np.maximum(eligible_a, eligible_b)
+                matched = np.where(correlations >= corr, values, -np.inf)
+                best_score = matched.max(axis=0)
                 for iw, weak in enumerate(WEAK_GRID):
                     eligible_own = eligible & (own >= weak)
-                    weak_both = low >= weak
+                    weak_votes = (matched >= weak).sum(axis=0)
                     for js, strong in enumerate(STRONG_GRID):
-                        accepted = eligible_own & (weak_both | (high >= strong))
-                        totals[iw, js, ic, i, shift_id] = (
-                            count_sustained(positions, accepted), eligible_count,
+                        strong_path, weak_path = support_paths(weak_votes, needed, best_score, strong)
+                        accepted = eligible_own & (strong_path | weak_path)
+                        totals[iw, js, ic, i, shift_id, :, 0] = count_sustained(
+                            positions, accepted, strata, stratum_count,
                         )
     return totals
 
@@ -75,12 +89,14 @@ def summarize(counts, labs, split):
         grid_cell = counts[iw, js, ic]
         grouped = [("all", grid_cell.sum(axis=0)), *zip((lab.name for lab in labs), grid_cell)]
         for name, by_shift in grouped:
-            observed, eligible = map(int, by_shift[0])
-            denominators = by_shift[1:, 1]
-            valid = int(np.count_nonzero(denominators))
+            observed, eligible = map(int, by_shift[0].sum(axis=0))
+            represented = by_shift[0, :, 1] > 0
+            denominators = by_shift[1:, represented, 1]
+            valid = int(np.count_nonzero(np.all(denominators > 0, axis=1))) if eligible else 0
             mean = minimum = maximum = ratio = None
             if eligible and valid == len(denominators):
-                scaled = by_shift[1:, 0] * (eligible / denominators)
+                observed_by_count = by_shift[0, represented, 1]
+                scaled = (by_shift[1:, represented, 0] * (observed_by_count / denominators)).sum(axis=1)
                 mean, minimum, maximum = float(scaled.mean()), float(scaled.min()), float(scaled.max())
                 ratio = mean / observed if observed else None
             yield dict(split=split, anchor_lab=name, weak=weak, strong=strong, min_corr=corr,

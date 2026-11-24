@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mepa-peaks"
-version = "0.1.0"
+version = "0.2.0"
 description = "MEPA (Multi-Experiment Peak Aggregation) for shift-calibrated pooling of broad peaks across labs"
 requires-python = ">=3.11"
 readme = "README.md"

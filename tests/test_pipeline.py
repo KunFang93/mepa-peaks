@@ -5,6 +5,8 @@ import json
 import os
 import shutil
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -12,11 +14,13 @@ import numpy as np
 import pyBigWig
 import pysam
 
-from pooled_peaks.calibration import SHIFTS_KB
+from pooled_peaks.calibration import SHIFTS_KB, empty_counts, resolve_shifts, summarize
+from pooled_peaks.cli import main
 from pooled_peaks.consensus import run_consensus
-from pooled_peaks.inputs import SAMPLE_COLUMNS, Sample, read_genome, read_samples
+from pooled_peaks.evidence import support_paths
+from pooled_peaks.inputs import SAMPLE_COLUMNS, Lab, Sample, read_genome, read_samples, resolve_min_labs
 from pooled_peaks.midpoints import cache_sample, count_bam, count_bigwig, export_bigwig
-from pooled_peaks.pooling import run_pooling
+from pooled_peaks.pooling import direct_cores, run_pooling
 
 
 MSPC = shutil.which(os.environ.get("MEPA_MSPC", "mspc"))
@@ -69,6 +73,127 @@ class MidpointTests(unittest.TestCase):
                 stream.addEntries(["chrTest"], [0], ends=[250], values=[1.25])
             with self.assertRaisesRegex(ValueError, "raw integer midpoint count"):
                 count_bigwig(path, {"chrTest": 1000})
+
+
+class MultiLabTests(unittest.TestCase):
+    def test_support_minimum_and_shift_counts(self):
+        for count, minimum in ((2, 2), (3, 2), (4, 3), (5, 3), (6, 4), (12, 7)):
+            self.assertEqual(resolve_min_labs(count, None), minimum)
+            self.assertEqual(resolve_min_labs(count, count), count)
+            shifts = resolve_shifts(count)
+            self.assertEqual(len(set(shifts)), 6)
+            for trial in shifts:
+                self.assertEqual(len(set(trial)), count - 1)
+                self.assertNotIn(0, trial)
+        self.assertEqual(resolve_shifts(3), SHIFTS_KB)
+        self.assertEqual(resolve_shifts(2), tuple((left,) for left, _ in SHIFTS_KB))
+        with self.assertRaisesRegex(ValueError, "--min-labs"):
+            resolve_min_labs(4, 5)
+        with self.assertRaisesRegex(ValueError, "3 distinct nonzero offsets"):
+            resolve_shifts(4, SHIFTS_KB)
+
+    def test_shared_short_overlap_depends_on_required_lab_count(self):
+        tracks = [
+            {"chrTest": [(0, 900)]},
+            {"chrTest": [(550, 1500)]},
+            {"chrTest": [(550, 900)]},
+            {"chrTest": [(100, 1400)]},
+        ]
+        self.assertEqual(direct_cores(tracks, "chrTest", 2), ([(100, 1400)], [(550, 900)]))
+        self.assertEqual(direct_cores(tracks, "chrTest", 3), ([], [(550, 900)]))
+        self.assertEqual(direct_cores(tracks[:2], "chrTest", 2), ([], []))
+
+    def test_shift_adjustment_by_number_of_calling_labs(self):
+        labs = [Lab(name, (), ()) for name in "ABCD"]
+        counts = empty_counts(resolve_shifts(4), 4, 3)
+        counts[0, 0, 0, 0, 0] = [(2, 20), (3, 10)]
+        counts[0, 0, 0, 0, 1:] = [(1, 10), (1, 2)]
+        first = next(summarize(counts, labs, "calibration"))
+        self.assertEqual(first["observed_tiles"], 5)
+        self.assertEqual(first["shifted_mean_tiles"], 7.0)
+        self.assertEqual(first["shifted_observed_ratio"], 1.4)
+
+    def test_weak_support_needs_one_extra_lab(self):
+        strong, extra_weak = support_paths(np.array([1, 1, 2, 2, 3]), np.array([1, 1, 2, 2, 2]),
+                                           np.array([1.0, 2.0, 1.0, 2.0, 1.0]), 2.0)
+        self.assertEqual(strong.tolist(), [False, True, False, True, False])
+        self.assertEqual(extra_weak.tolist(), [False, False, False, False, True])
+
+    def test_two_four_and_six_lab_cli_rescue_and_override(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            genome = root / "genome.tsv"
+            genome.write_text("chrom\tlength\tsplit\nchrFit\t5000000\tcalibration\n")
+            sheet = root / "samples.tsv"
+            rows = []
+            shared_by_three, shared_by_all = 1_700_000, 1_800_000
+            single_call, double_call = 2_000_000, 2_200_000
+            for lab in "ABCDEF":
+                called = [shared_by_all]
+                if lab in "ABC":
+                    called.append(shared_by_three)
+                if lab == "A":
+                    called.append(single_call)
+                if lab in "AB":
+                    called.append(double_call)
+                near = [single_call, double_call] if lab in "ABCE" else []
+                primary, permissive = root / f"{lab}.broadPeak", root / f"{lab}.permissive.bed"
+                primary.write_text("".join(
+                    f"chrFit\t{start}\t{start + 3000}\t{lab}_{start}\t900\t.\t9\t9\t9\n"
+                    for start in sorted(called)
+                ))
+                permissive.write_text("".join(
+                    f"chrFit\t{start}\t{start + 3000}\t{lab}_{start}\n" for start in sorted(set(called + near))
+                ))
+                midpoint = root / f"{lab}.bw"
+                counts = {1_500_000: 1}
+                for start in near:
+                    profile = (1, 2, 3, 7, 9, 13, 19, 14, 10, 5, 3, 2, 1)
+                    counts.update({start + (i - 2) * 250: value for i, value in enumerate(profile)})
+                starts = sorted(counts)
+                with pyBigWig.open(str(midpoint), "w") as stream:
+                    stream.addHeader([("chrFit", 5_000_000)])
+                    stream.addEntries(["chrFit"] * len(starts), starts,
+                                      ends=[start + 250 for start in starts],
+                                      values=[float(counts[start]) for start in starts])
+                rows.append([lab, lab, "target", primary, permissive, "", midpoint])
+
+            def run(count):
+                with sheet.open("w", newline="") as stream:
+                    writer = csv.writer(stream, delimiter="\t")
+                    writer.writerow(SAMPLE_COLUMNS)
+                    writer.writerows(rows[:count])
+                output = root / f"labs{count}"
+                with redirect_stdout(StringIO()):
+                    code = main(["run", "--samples", str(sheet), "--genome", str(genome),
+                                 "--workers", "1", "--outdir", str(output)])
+                self.assertEqual(code, 0)
+                return output
+
+            two = run(2)
+            six = run(6)
+            four = run(4)
+            for run_root, minimum in ((two, 2), (four, 3), (six, 4)):
+                output = run_root / "step4_pool"
+                thresholds = json.loads((output / "thresholds.json").read_text())
+                self.assertEqual(thresholds["status"], "calibrated")
+                self.assertEqual(thresholds["min_labs"], minimum)
+                self.assertEqual(thresholds["calibration"]["shifted_observed_ratio"], 0)
+                with (output / "pooled_peak_evidence.tsv").open() as stream:
+                    regions = list(csv.DictReader(stream, delimiter="\t"))
+                for locus in (single_call, double_call) if minimum > 2 else (single_call,):
+                    rescued = next(row for row in regions if int(row["start"]) <= locus < int(row["end"]))
+                    self.assertGreater(int(rescued["added_signal_seed_bp"]), 0)
+
+            strict = root / "unanimous"
+            with redirect_stdout(StringIO()):
+                code = main(["step4", "--samples", str(sheet), "--genome", str(genome),
+                             "--step3-dir", str(four / "step3_mspc"), "--outdir", str(strict),
+                             "--workers", "1", "--min-labs", "4"])
+            self.assertEqual(code, 0)
+            summary = json.loads((strict / "pooling_summary.json").read_text())
+            self.assertEqual((summary["lab_count"], summary["min_labs"], summary["peaks"]), (4, 4, 1))
+            self.assertTrue((strict / "pooled_peaks.bed").read_text().startswith(f"chrFit\t{shared_by_all}\t"))
 
 
 @unittest.skipUnless(MSPC, "MSPC v6.1.0 is required for this integration test")

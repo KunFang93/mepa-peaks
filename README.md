@@ -4,7 +4,7 @@
 
 MEPA is provided as is. You're welcome to modify the code and open issues for bugs, questions, or suggestions. Replies are best effort, with no guaranteed turnaround. [Open an issue](https://github.com/KunFang93/mepa-peaks/issues/new)
 
-Build a pooled broad-peak BED from three labs profiling the same mark in comparable samples. Step 3 builds within-lab consensus with MSPC v6.1.0. Step 4 combines lab-level peak calls, rescues loci with reproducible signal, and selects rescue thresholds using a within-chromosome shift test. A lab with one replicate contributes its full primary MACS3 peak set.
+Build a pooled broad-peak BED from labs profiling the same mark in comparable samples. Step 3 builds within-lab consensus with MSPC v6.1.0. Step 4 combines lab-level peak calls, rescues loci with reproducible signal, and selects rescue thresholds using a within-chromosome shift test. A lab with one replicate contributes its full primary MACS3 peak set.
 
 ![MEPA workflow from MACS3 broadPeak and BAM or midpoint-count BigWig through MSPC, shift calibration, and pooled BED export](docs/workflow.png)
 
